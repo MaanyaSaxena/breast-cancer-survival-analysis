@@ -1,0 +1,7 @@
+risk_group,patients,deaths,model
+Low,211,72,Cox PH
+Medium,168,94,Cox PH
+High,214,177,Cox PH
+Low,195,64,Random survival forest
+Medium,187,104,Random survival forest
+High,211,175,Random survival forest
