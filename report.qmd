@@ -1,0 +1,180 @@
+---
+title: "Breast Cancer Survival Analysis in R: Identifying High-Risk Patient Groups"
+format:
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+library(tidyverse); library(here); library(knitr); library(gtsummary)
+here::i_am("reports/report.qmd")
+rd <- function(f) read_csv(here("data","clean",f), show_col_types = FALSE)
+fmt_p <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+```
+
+## Executive summary
+
+- **Cohort:** 1,980 METABRIC patients with valid survival data; 1,144 (57.8%) died during follow-up. The outcome is all-cause overall survival.
+- **Main associations (adjusted):** older age, more positive lymph nodes, larger tumors, higher stage, and HER2-positive status are linked to shorter survival; radiotherapy is linked to longer survival. Grade 3 is significant after imputation.
+- **Model performance (held-out test set, n = 593):** Cox C-index 0.686 and random survival forest 0.690; the difference is small.
+- **Risk tiers:** low / medium / high groups separate survival clearly (high vs low HR 4.32 for Cox, 4.69 for the forest).
+- **Caution:** results are observational associations from one older cohort; proportional hazards is violated for several variables; the tiers are exploratory and not a validated clinical tool.
+
+## Question
+
+Which patient and tumor characteristics are associated with shorter survival, and can patients be grouped by risk so that follow-up could be prioritized? This is an exploratory analysis of METABRIC clinical data (cBioPortal). The outcome is **all-cause overall survival**, not breast-cancer-specific survival, and all results are observational associations.
+
+## Data and cleaning
+
+```{r}
+cat(readLines(here("data","clean","cleaning_log.txt")), sep = "\n")
+```
+
+![](../figures/missingness.png){width=60%}
+
+```{r}
+rd("missingness_vs_outcome.csv") |>
+  kable(digits = 2, caption = "Patients with vs without missing key variables")
+```
+
+## Who are the patients?
+
+```{r}
+clean <- rd("metabric_clean.csv") |> mutate(across(c(stage, grade), factor))
+clean |>
+  select(age, age_group, tumor_size, stage, grade, nodes_pos, er_status, pr_status,
+         her2_status, hr_status, chemo, hormone_tx, radio_tx, event) |>
+  mutate(event = factor(event, labels = c("Censored", "Died"))) |>
+  tbl_summary(by = event, missing_text = "Missing") |>
+  add_overall() |> add_p() |> as_gt()
+```
+
+## Survival by group (Kaplan-Meier, log-rank)
+
+```{r}
+rd("logrank_results.csv") |> mutate(p_logrank = fmt_p(p_logrank)) |> kable()
+```
+
+Hormone receptor curves cross at about 170-190 months, so the log-rank test (p = 0.051) understates the early difference.
+
+![](../figures/km_stage.png){width=70%}
+
+![](../figures/km_grade.png){width=70%}
+
+![](../figures/km_age_group.png){width=70%}
+
+![](../figures/km_hr_status.png){width=70%}
+
+![](../figures/km_her2_status.png){width=70%}
+
+## Adjusted effects (Cox model)
+
+![](../figures/forest_plot.png)
+
+```{r}
+rd("cox_hazard_ratios.csv") |>
+  mutate(hr = sprintf("%.3f (%.3f-%.3f)", estimate, conf.low, conf.high)) |>
+  select(term, model, hr) |>
+  pivot_wider(names_from = model, values_from = hr) |>
+  kable(caption = "Hazard ratios (95% CI): complete-case vs multiple imputation")
+```
+
+Age is per year, tumor size per mm, and positive nodes per node. Multiple imputation is the primary analysis; the complete-case model uses 1,354 of 1,980 patients.
+
+## Proportional hazards
+
+```{r}
+rd("ph_test.csv") |> mutate(p = fmt_p(p)) |> kable(digits = 3, caption = "Schoenfeld test, full model")
+```
+
+![](../figures/schoenfeld.png)
+
+```{r}
+rd("ph_test_er_strat.csv") |> mutate(p = fmt_p(p)) |> kable(digits = 3, caption = "Schoenfeld test, ER-stratified model")
+```
+
+The proportional hazards assumption was violated for age, stage, grade, ER status, HER2 status, chemotherapy and hormone therapy (global p < 0.001). The Kaplan-Meier curves for hormone receptor status cross at about 170-190 months, which explains the ER violation. Stratifying on ER status resolves the HER2 violation and leaves the other estimates essentially unchanged, but age, stage, grade, chemotherapy and hormone therapy still fail the test. A refit restricted to the first 10 years shows stronger effects for stage, grade, ER status and hormone therapy, so effects weaken over longer follow-up. Reported hazard ratios should be read as average effects over follow-up, not constant effects.
+
+```{r}
+rd("cox_tt_age.csv") |>
+  mutate(p.value = fmt_p(p.value)) |>
+  kable(digits = 4, caption = "ER-stratified Cox model with a time-varying age effect (age x log time); coefficients on the log-hazard scale")
+```
+
+The `tt(age)` term is significant, so the effect of age changes over follow-up. Using the fitted coefficients, the hazard ratio per year of age is roughly 1.01 at 1 year, 1.04 at 5 years and 1.05 at 10 years: it grows with follow-up time instead of weakening. This is plausible for an all-cause outcome, where deaths from other causes become more common in older patients over time.
+
+```{r}
+rd("cox_10yr.csv") |>
+  mutate(hr = sprintf("%.2f (%.2f-%.2f)", estimate, conf.low, conf.high)) |>
+  mutate(p.value = fmt_p(p.value)) |>
+  select(term, hr, p.value) |>
+  kable(digits = 4, caption = "Cox model restricted to the first 10 years (complete-case)")
+```
+
+## Cox vs random survival forest (held-out test set)
+
+```{r}
+kable(rd("model_comparison.csv"), digits = 3)
+```
+
+![](../figures/model_comparison.png){width=60%}
+
+![](../figures/rsf_importance.png){width=60%}
+
+The two models perform essentially the same (difference about 0.004, with overlapping intervals). Forest risk scores for training patients are out-of-bag cumulative hazards; their distribution closely matches the test-set scores (medians 327 vs 335), so training-set tertile cut points were applied unchanged to the test set. For this prediction comparison, predictors were imputed once (m = 1), learning the imputation model from training rows only; no outcome information was used. The Cox inference above instead uses five imputations pooled with Rubin's rules, which carries the imputation uncertainty.
+
+## Risk groups
+
+Risk groups were built for both models, and neither was chosen using test results.
+
+![](../figures/risk_groups_cox.png)
+
+![](../figures/risk_groups_rsf.png)
+
+```{r}
+rd("risk_group_hr.csv") |>
+  mutate(hr = sprintf("%.2f (%.2f-%.2f)", estimate, conf.low, conf.high)) |>
+  mutate(term = str_remove(term, "risk_group")) |>
+  select(model, term, hr) |>
+  kable(caption = "Hazard ratio vs low-risk group, held-out patients")
+
+```{r}
+rd("risk_group_counts.csv") |>
+  select(model, risk_group, patients, deaths) |>
+  kable(caption = "Patients and deaths per risk group, held-out test set")
+```
+
+## Findings
+
+**Finding 1: Age, nodal involvement and stage are among the strongest predictors of shorter survival.**
+*Evidence:* adjusted HR per year of age 1.043 (95% CI 1.036-1.049); per positive node 1.050 (1.036-1.064); stage 2 vs 0-1 HR 1.30 (1.10-1.55); stage 3-4 HR 1.51 (1.04-2.17); tumor size 1.0075 per mm (about 1.08 per 10 mm).
+*Implication:* older patients and those with node-positive or higher-stage disease carry more of the risk, although some age-related deaths will not be breast-cancer deaths.
+*Recommendation:* if follow-up is prioritized, these groups are natural candidates to review first.
+
+**Finding 2: HER2-positive status and higher grade carry extra risk; radiotherapy is associated with lower risk.**
+*Evidence:* HER2-positive HR 1.38 (1.15-1.65); grade 3 vs 1 HR 1.36 (1.06-1.75) after imputation (1.26, not significant, in complete cases); radiotherapy HR 0.77 (0.68-0.88).
+*Implication:* HER2 and grade add information beyond stage. The radiotherapy association is observational and may reflect who was selected for treatment; the chemotherapy hazard ratio above 1 reflects confounding by indication, not harm.
+*Recommendation:* do not read treatment hazard ratios as evidence of benefit or harm.
+
+**Finding 3: A risk score separates patients into clearly different survival groups.**
+*Evidence:* on 593 held-out patients, the C-index was 0.69 for both Cox and the random survival forest. Compared with the low-risk group, the high-risk group had HR 4.32 (3.27-5.71) for Cox and 4.69 (3.51-6.27) for the forest; medium-risk HRs were 1.98 and 2.08.
+*Implication:* a simple three-tier score separates survival well on held-out patients, but predictive accuracy is moderate.
+*Recommendation:* treat the tiers as exploratory risk stratification to inform discussion, not as a validated decision tool; any pilot would need outcome monitoring.
+
+## Limitations
+
+- Observational data: associations, not causation.
+- All-cause outcome: the age effect includes non-breast-cancer deaths.
+- Missing data: stage is missing for about 26% of patients, and patients with missing data had a somewhat higher death rate (61.7% vs 56.0%).
+- Proportional hazards is violated for several variables; hazard ratios are average effects over follow-up.
+- Treatments were not randomized, so treatment associations are confounded.
+- One cohort and era; results may not generalize.
+- Single train/test split; moderate predictive accuracy (C-index about 0.69).
+- Clinical variables only; no genomic information.
+- Stage 0 and stage 4 are rare and were merged with neighboring levels.
