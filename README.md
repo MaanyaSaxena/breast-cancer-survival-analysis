@@ -316,6 +316,3 @@ breast-cancer-survival/
 
 The random seed (2026) is set in `00_setup.R` so splits and imputations repeat.
 
-## Portfolio Takeaway
-
-This project connects careful data preparation and missing-data handling with survival analysis, honest assumption checking, and held-out model comparison. Its contribution is not a high model score: it shows how to turn clinical follow-up data into explainable hazard ratios and a simple three-tier risk grouping, while stating plainly where the assumptions fail and what the results cannot prove.
