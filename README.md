@@ -231,7 +231,9 @@ The Quarto report (`reports/report.qmd`) renders to a self-contained HTML file. 
 6. **Model comparison and forest importance:** held-out C-index and permutation importance.
 7. **Risk-group curves:** test-set survival by low, medium, and high risk, for Cox and for the forest.
 
-Published report: _add your GitHub Pages or RPubs link here_
+Published report: 
+
+[View the Interactive Breast Cancer Survival Analysis Report](https://maanyasaxena.github.io/breast-cancer-survival-analysis/)
 
 ## 16. Limitations
 
@@ -254,8 +256,8 @@ Adapt this tree to the files that actually exist in the repository.
 breast-cancer-survival/
 ├── README.md
 ├── data/
-│   ├── raw/                       # METABRIC files, not committed
-│   └── clean/                     # cleaned dataset and result tables
+│   ├── raw/                       
+│   └── clean/                     
 ├── scripts/
 │   ├── 00_setup.R
 │   ├── 01_clean.R
